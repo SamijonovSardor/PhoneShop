@@ -6,6 +6,7 @@ Buyruqlar:
   /count  - Bazadagi telefonlar soni
   /clear  - Suhbat tarixini tozalash
   /stats  - Statistika
+  /source - Oxirgi javobda ishlatilgan telefonlar (ixtiyoriy)
 """
 import logging
 from telegram import Update
@@ -52,6 +53,7 @@ HELP_MESSAGE = (
     "/start — Botni qayta boshlash\n"
     "/help — Yordam xabari\n"
     "/count — Bazadagi telefonlar soni\n"
+    "/source — Oxirgi javobda qaysi telefonlar ko'rilganini ko'rsat\n"
     "/clear — Suhbat tarixini tozalash\n"
     "/stats — Statistika\n\n"
     "*Maslahatlar:*\n"
@@ -82,6 +84,7 @@ async def count_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     deleted = memory.clear(chat_id)
+    context.user_data.pop("last_sources", None)
     if deleted:
         await update.message.reply_text(
             f"🧹 Suhbat tarixingiz tozalandi. {deleted} ta eski xabar o'chirildi.\n\n"
@@ -105,6 +108,29 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def source_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    last_sources = context.user_data.get("last_sources") or []
+    if not last_sources:
+        await update.message.reply_text(
+            "ℹ️ Hozircha ko'rsatiladigan manbalar yo'q.\n"
+            "Avval savol bering, keyin /source ni bosing."
+        )
+        return
+    lines = ["📋 *Oxirgi javobda ishlatilgan telefonlar:*\n"]
+    for i, src in enumerate(last_sources, start=1):
+        meta = src.get("metadata", {}) or {}
+        brand = meta.get("brand", "?")
+        model = meta.get("model", "?")
+        price = meta.get("price_usd", "?")
+        ram = meta.get("ram_gb", "?")
+        battery = meta.get("battery_mah", "?")
+        lines.append(
+            f"{i}. *{brand} {model}* — ${price}\n"
+            f"   RAM: {ram} GB · Batareya: {battery} mAh"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = (update.message.text or "").strip()
     if not user_query:
@@ -120,19 +146,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         result = rag.ask(user_query, history=history)
         answer = result["answer"]
 
-        if result.get("sources"):
-            sources_lines = []
-            seen = set()
-            for src in result["sources"]:
-                meta = src.get("metadata", {}) or {}
-                key = (meta.get("brand", ""), meta.get("model", ""))
-                if key in seen:
-                    continue
-                seen.add(key)
-                price = meta.get("price_usd", "?")
-                sources_lines.append(f"• {meta.get('brand', '?')} {meta.get('model', '?')} — ${price}")
-            if sources_lines:
-                answer += "\n\n_Manzba:_\n" + "\n".join(sources_lines[:5])
+        context.user_data["last_sources"] = result.get("sources", [])
 
         memory.add_message(chat_id, "user", user_query)
         memory.add_message(chat_id, "assistant", answer)
@@ -172,5 +186,6 @@ def build_application():
     app.add_handler(CommandHandler("count", count_cmd))
     app.add_handler(CommandHandler("clear", clear_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("source", source_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     return app
