@@ -5,8 +5,11 @@ To'liq RAG testi uchun OPENROUTER_API_KEY kerak va scripts/ingest.py
 orqali avval ma'lumotlarni yuklash kerak.
 """
 import json
+import shutil
 import sys
 import io
+import tempfile
+import gc
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -17,6 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.vector_store import vector_store
+from src.vector_store import PhoneVectorStore
 
 
 def test_document_formatting() -> None:
@@ -41,7 +45,7 @@ def test_document_formatting() -> None:
 def test_search_with_mock_embeddings() -> None:
     """Mock embedding bilan qidiruv mantig'ini test qilish.
 
-    Bu test faqat vektor omborining add + search mantig'ini tekshiradi.
+    Bu test ALOHIDA test collection ishlatadi, asosiy ma'lumotlarga tegmaydi.
     Haqiqiy embedding sifatini test qilmaydi.
     """
     from src import embeddings as emb_module
@@ -49,7 +53,9 @@ def test_search_with_mock_embeddings() -> None:
     original_embed_docs = emb_module.embeddings_client.embed_documents
     original_embed_query = emb_module.embeddings_client.embed_query
 
-    fake_dim = 8
+    sample = emb_module.embeddings_client.embed_query("test")
+    fake_dim = len(sample)
+
     emb_module.embeddings_client.embed_documents = lambda texts: [
         [0.1] * fake_dim for _ in texts
     ]
@@ -65,21 +71,33 @@ def test_search_with_mock_embeddings() -> None:
             "price_usd": 1000, "ram_gb": 12, "storage_gb": 256,
         },
     ]
-    try:
-        added = vector_store.add_phones(test_phones)
-        assert added == 2, f"2 ta telefon qo'shish kerak edi, {added} qo'shildi"
-        print(f"[OK] {added} ta test telefoni qo'shildi")
 
-        hits = vector_store.search("arzon telefon", top_k=2)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="rag_test_"))
+    try:
+        test_store = PhoneVectorStore(
+            persist_dir=tmp_dir,
+            collection_name="test_phones",
+        )
+        added = test_store.add_phones(test_phones)
+        assert added == 2, f"2 ta telefon qo'shish kerak edi, {added} qo'shildi"
+        print(f"[OK] {added} ta test telefoni alohida collection ga qo'shildi")
+
+        hits = test_store.search("arzon telefon", top_k=2)
         assert len(hits) == 2, f"2 ta natija topish kerak edi, {len(hits)} topildi"
         assert all("metadata" in h for h in hits)
         print(f"[OK] Search {len(hits)} ta natija qaytardi")
-        print(f"[OK] Vektor omborida jami: {vector_store.count} ta hujjat")
+        print(f"[OK] Asosiy vektor ombori tegilmadi: {vector_store.count} ta hujjat")
         print("[OK] Search test muvaffaqiyatli (to'liq RAG uchun OPENROUTER_API_KEY kerak)")
+
+        del test_store
+        gc.collect()
     finally:
         emb_module.embeddings_client.embed_documents = original_embed_docs
         emb_module.embeddings_client.embed_query = original_embed_query
-        vector_store.reset()
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
         print("[OK] Test ma'lumotlari tozalandi")
 
 

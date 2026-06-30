@@ -4,6 +4,8 @@ Buyruqlar:
   /start  - Botni boshlash
   /help   - Yordam
   /count  - Bazadagi telefonlar soni
+  /clear  - Suhbat tarixini tozalash
+  /stats  - Statistika
 """
 import logging
 from telegram import Update
@@ -19,6 +21,7 @@ from telegram.ext import (
 from .config import settings
 from .rag import rag
 from .vector_store import vector_store
+from .memory import memory
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -36,21 +39,26 @@ WELCOME_MESSAGE = (
     "• Samsung brendida 500 dollar gacha bo'lgan eng yaxshi model qaysi?\n"
     "• O'yin o'ynash uchun kuchli protsessorli telefon tavsiya qiling\n"
     "• 200 dollar ga qanaqa telefon olish mumkin?\n\n"
-    "/help - yordam"
+    "Men suhbat tarixingizni eslab qolaman - oldingi savollaringizga asoslanib "
+    "yanada aniqroq javob bera olaman.\n\n"
+    "/help - yordam, /clear - tarixni tozalash"
 )
 
 HELP_MESSAGE = (
     "*Yordam* ℹ️\n\n"
     "Bot sizning savolingizni tushunadi va kompaniya telefonlar "
-    "bazasi asosida javob beradi.\n\n"
+    "bazasi asosida javob beradi. Suhbat tarixingiz saqlanadi.\n\n"
     "*Buyruqlar:*\n"
     "/start — Botni qayta boshlash\n"
     "/help — Yordam xabari\n"
-    "/count — Bazadagi telefonlar soni\n\n"
+    "/count — Bazadagi telefonlar soni\n"
+    "/clear — Suhbat tarixini tozalash\n"
+    "/stats — Statistika\n\n"
     "*Maslahatlar:*\n"
     "• Byudjetingizni yozing (masalan: 300-400 dollar)\n"
     "• Brend yoki xususiyat ko'rsating (kamera, batareya, RAM)\n"
-    "• Foydalanish maqsadingizni ayting (o'yin, foto, ish)"
+    "• Foydalanish maqsadingizni ayting (o'yin, foto, ish)\n"
+    "• Qisqa savol bersangiz, avvalgi suhbat konteksti saqlanadi"
 )
 
 
@@ -71,6 +79,32 @@ async def count_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Xatolik yuz berdi: {exc}")
 
 
+async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    deleted = memory.clear(chat_id)
+    if deleted:
+        await update.message.reply_text(
+            f"🧹 Suhbat tarixingiz tozalandi. {deleted} ta eski xabar o'chirildi.\n\n"
+            "Yangi suhbat boshlang!"
+        )
+    else:
+        await update.message.reply_text("Suhbat tarixingiz bo'sh edi. 😊")
+
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    my_messages = memory.count(chat_id)
+    total_users = memory.total_users()
+    total_phones = vector_store.count
+    await update.message.reply_text(
+        f"📊 *Statistika*\n\n"
+        f"• Bazada telefonlar: *{total_phones}* ta\n"
+        f"• Faol foydalanuvchilar: *{total_users}* ta\n"
+        f"• Sizning tarixingiz: *{my_messages}* ta xabar",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = (update.message.text or "").strip()
     if not user_query:
@@ -82,7 +116,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     try:
-        result = rag.ask(user_query)
+        history = memory.get_history(chat_id)
+        result = rag.ask(user_query, history=history)
         answer = result["answer"]
 
         if result.get("sources"):
@@ -98,6 +133,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 sources_lines.append(f"• {meta.get('brand', '?')} {meta.get('model', '?')} — ${price}")
             if sources_lines:
                 answer += "\n\n_Manzba:_\n" + "\n".join(sources_lines[:5])
+
+        memory.add_message(chat_id, "user", user_query)
+        memory.add_message(chat_id, "assistant", answer)
 
         for chunk in _split_message(answer):
             await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
@@ -132,5 +170,7 @@ def build_application():
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("count", count_cmd))
+    app.add_handler(CommandHandler("clear", clear_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     return app

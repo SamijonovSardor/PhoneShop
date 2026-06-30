@@ -58,7 +58,12 @@ class RAGPipeline:
             )
         return "\n".join(lines)
 
-    def ask(self, user_query: str, top_k: int | None = None) -> Dict[str, Any]:
+    def ask(
+        self,
+        user_query: str,
+        history: List[Dict[str, str]] | None = None,
+        top_k: int | None = None,
+    ) -> Dict[str, Any]:
         hits = self._store.search(user_query, top_k=top_k)
         context = self._format_context(hits)
 
@@ -67,12 +72,16 @@ class RAGPipeline:
             f"KONTEKST (bazadan topilgan telefonlar):\n{context}"
         )
 
+        messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if history:
+            for msg in history:
+                if msg.get("role") in ("user", "assistant") and msg.get("content"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": user_message})
+
         response = self._client.chat.completions.create(
             model=self._model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
+            messages=messages,
             temperature=0.4,
             max_tokens=900,
         )
