@@ -18,6 +18,9 @@ ENV/
 chroma_db/
 *.sqlite3
 *.db
+*.db-wal
+*.db-shm
+data/conversations*
 build/
 dist/
 *.egg-info/
